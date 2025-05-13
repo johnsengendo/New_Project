@@ -1,68 +1,105 @@
-#!/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# Importing necessary libraries
 import subprocess
 import os
 import time
-import signal 
+import signal
 
-def start_capture():
-    """
-    Starting packet capturing on server-eth0 interface using tcpdump. Captures all packets
-    on source port 1935 and writing them to a pcap file. This is used to
-    capture network traffic associated with the video streaming.
-    """
-    proc = subprocess.Popen(["tcpdump", "-U", "-s0", "-i", "server-eth0", "src", "port", "1935", "-w", "pcap/server.pcap"])
-    #proc = subprocess.Popen(["tcpdump", "-U", "-s0", "-i", "h6-eth0", "src", "port", "1935", "-w", "pcap/server.pcap", "-A"])
 
+def start_capture(interface, outfile="pcap/server.pcap"):
+    """
+    Start packet capture on the given interface, filtering for RTMP (TCP port 1935).
+    Writes raw packets to `outfile`.
+    """
+    cmd = [
+        "tcpdump",
+        "-U",        # Make packet writes unbuffered
+        "-s0",       # Capture full packet
+        "-i", interface,
+        "tcp",        # Only capture TCP (RTMP runs over TCP)
+        "port", "1935",
+        "-w", outfile
+    ]
+    proc = subprocess.Popen(cmd)
     return proc.pid
 
-def start_capture_h6():
-    """
-    Start packet capturing on h6-eth0 interface using tcpdump.
-    Appends captured packets to the server.pcap file.
-    """
-    proc = subprocess.Popen(["tcpdump", "-U", "-s0", "-i", "h6-eth0", "src", "port", "1935", "-w", "pcap/server.pcap", "-A"])
-    return proc.pid
 
-def stop_capture(pid_list):
+def stop_capture(pids):
     """
-    Stoping the tcpdump process that was started by start_capture. Searches through
-    the process list, identifies the tcpdump process, and sends a SIGINT signal to
-    terminate it.
+    Stop all tcpdump processes given by pid list via SIGINT.
     """
-    for pid in pid_list:
+    for pid in pids:
         try:
             os.kill(pid, signal.SIGINT)
         except OSError as e:
-            print(f"Error stopping capture: {e}")    
+            print(f"Error stopping capture (pid={pid}): {e}")
+
+
+def stream_audio(input_file,
+                 loops=0,
+                 duration=120,
+                 rtmp_url="rtmp://localhost:1935/live/audio.flv"):
+    """
+    Stream the specified audio file via FFmpeg over RTMP.
+
+    - `-re`: read input at native frame rate
+    - `-stream_loop`: number of loops (0 = no loop)
+    - `-vn`: disable video stream
+    - `-c:a aac`: encode audio as AAC
+    - `-ar 44100`: set audio sampling rate
+    - `-ac 1`: single audio channel
+    - `-t`: limit duration (seconds)
+    - `-f flv`: output format for RTMP
+    """
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-loglevel", "info",
+        "-stats",
+        "-re",
+        "-stream_loop", str(loops),
+        "-i", input_file,
+        "-vn",
+        "-t", str(duration),
+        "-c:a", "aac",
+        "-ar", "44100",
+        "-ac", "1",
+        "-f", "flv",
+        rtmp_url
+    ]
+    subprocess.run(ffmpeg_cmd, check=True)
+
 
 def main():
-    """
-    Main function to handle video streaming with optional packet capture.
-    """
-    input_file = "video/Jam.mp4"
-    loops_number = 0  # Stream the video once, without looping
-    capture_traffic = True
+    # Path to your audio file
+    input_audio = "video/track.mp3"
+    # Number of times to loop (-1 for infinite, 0 for no loop)
+    loops = 0
+    # Capture duration in seconds (None to disable)
+    duration = 120
 
+    capture = True
     pids = []
 
-    if capture_traffic:
-        pids.append(start_capture())
-        pids.append(start_capture_h6())
-        #pid = start_capture()  # Begining packet capturing
-        time.sleep(2)   # Short delay to ensure capturing starts before streaming
+    if capture:
+        # start capture on both interfaces
+        pids.append(start_capture("server-eth0"))
+        pids.append(start_capture("h6-eth0"))
+        time.sleep(2)  # ensure tcpdump is up
 
-    ffmpeg_command = [
-        "ffmpeg", "-loglevel", "info", "-stats", "-re", "-stream_loop", str(loops_number), "-i", input_file,
-        "-t", "120", "-c:v", "copy", "-c:a", "aac", "-ar", "44100", "-ac", "1",
-        "-f", "flv", "rtmp://localhost:1935/live/video.flv"
-    ]
-    subprocess.run(ffmpeg_command)  # Running ffmpeg command to stream video
+    # Start streaming audio
+    try:
+        stream_audio(
+            input_file=input_audio,
+            loops=loops,
+            duration=duration,
+            rtmp_url="rtmp://localhost:1935/live/audio.flv"
+        )
+    finally:
+        # Cleanup packet capture
+        if capture:
+            stop_capture(pids)
 
-    if capture_traffic:
-        stop_capture(pids)  # Stopping packet capturing after streaming is done
 
 if __name__ == "__main__":
     main()
