@@ -50,9 +50,12 @@ def start_iperf_client2(host):
 def stop_iperf_client(host):
     host.cmd('pkill iperf')
 
-# Function to capture traffic on a specific link
+# Function to capture video traffic on a specific link
 def capture_traffic(interface, pcap_file):
-    subprocess.run(['tcpdump', '-i', interface, '-w', pcap_file])
+    # Replace '10.0.0.1' and '10.0.0.2' with the actual IP addresses of your video streaming server and client
+    # Replace '12345' with the actual port used by your video streaming application
+    filter_rule = 'host 10.0.0.1 and host 10.0.0.2 and port 12345'
+    subprocess.run(['tcpdump', '-i', interface, '-w', pcap_file, filter_rule])
 
 # Main execution starts here
 if __name__ == '__main__':
@@ -134,7 +137,7 @@ if __name__ == '__main__':
     # Path to save the pcap file
     pcap_file = os.path.join(shared_directory, 'capture.pcap')
 
-    # Start capturing traffic on the middle link
+    # Start capturing video traffic on the middle link
     capture_thread = threading.Thread(target=capture_traffic, args=(middle_link.intf1.name, pcap_file))
     capture_thread.start()
 
