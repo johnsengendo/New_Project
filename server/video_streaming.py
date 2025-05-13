@@ -62,7 +62,7 @@ def stream_audio(input_file,
 
 
 def main():
-    input_audio = "audio/sample.wav"  # Your downloaded WAV file
+    input_audio = "video/audio.wav"  # Your downloaded WAV file
     loops = 0
     duration = 120
     capture = True
