@@ -55,11 +55,10 @@ def stop_iperf_client(host):
 # Function to capture traffic on a specific link
 def capture_traffic(interface, pcap_file):
     info(f'*** Starting tcpdump capture on {interface} to {pcap_file}\n')
-    # Capture only traffic between server and client (audio streaming traffic)
+    # Create a more generic filter to capture all traffic on the interface
+    # We can process and filter the pcap file later if needed
     # Using -s 1500 to capture full packets (MTU size)
-    tcpdump_process = subprocess.Popen(['tcpdump', '-i', interface, 
-                                      'host 10.0.0.1 and host 10.0.0.2',  # Only traffic between server and client
-                                      '-s', '1500', '-w', pcap_file],
+    tcpdump_process = subprocess.Popen(['tcpdump', '-i', interface, '-s', '1500', '-w', pcap_file],
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return tcpdump_process
 
@@ -158,8 +157,22 @@ if __name__ == '__main__':
     # Start capturing traffic on the middle link
     tcpdump_process = capture_traffic(s1_middle_interface, pcap_file)
 
-    # Removed all iperf traffic to keep only audio streaming traffic in the middle link
-    info('*** No additional traffic will be generated to keep only audio streaming traffic\n')
+    # Start iperf servers
+    start_iperf_server(h6)
+    start_iperf_server(h5)
+
+    # Use a timer to start iperf communication between h3 and h6 after 2 seconds
+    def start_iperf_after_delay():
+        time.sleep(2)
+        start_iperf_client(h3, '10.0.0.6')
+        start_iperf_client(h4, '10.0.0.8')
+        time.sleep(20)
+        stop_iperf_client(h3)
+        stop_iperf_client(h4)
+
+    iperf_thread = threading.Thread(target=start_iperf_after_delay)
+    iperf_thread.daemon = True  # Set as daemon to exit when main program exits
+    iperf_thread.start()
 
     # Creating threads to run the server and client
     server_thread = threading.Thread(target=start_server)
@@ -177,6 +190,7 @@ if __name__ == '__main__':
             # Wait for threads to finish in autotest mode
             server_thread.join()
             client_thread.join()
+            iperf_thread.join()
     except KeyboardInterrupt:
         info("\n*** Caught keyboard interrupt, stopping experiment\n")
     finally:
