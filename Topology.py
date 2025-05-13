@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import threading
+import signal
 
 # Importing necessary functionalities from ComNetsEmu and Mininet
 from comnetsemu.cli import CLI, spawnXtermDocker
@@ -28,46 +29,54 @@ def add_streaming_container(manager, name, role, image, shared_dir):
 
 # Function to start server
 def start_server():
+    info('*** Starting streaming server\n')
     subprocess.run(['docker', 'exec', '-it', 'streaming_server', 'bash', '-c', 'cd /home && python3 video_streaming.py'])
 
 # Function to start client
 def start_client():
+    info('*** Starting streaming client\n')
     subprocess.run(['docker', 'exec', '-it', 'streaming_client', 'bash', '-c', 'cd /home && python3 get_video_streamed.py'])
 
-# Function to start iperf server on h6
-def start_iperf_server(host):
-    host.cmd('iperf -s -p 5001 -u &')  # Use UDP for more disruptive traffic
+# Function to start iperf server
+def start_iperf_server(host, port=5001):
+    info(f'*** Starting iperf server on {host.name}\n')
+    host.cmd(f'iperf -s -p {port} -u &')  # Use UDP for more disruptive traffic
 
-# Function to start iperf client on h3
-def start_iperf_client(host):
-    host.cmd('iperf -c 10.0.0.6 -p 5001 -u -b 2M -t 120 &')  # Use UDP with high bandwidth
+# Function to start iperf client
+def start_iperf_client(host, server_ip, port=5001, bandwidth='2M', duration=120):
+    info(f'*** Starting iperf client on {host.name} to {server_ip}\n')
+    host.cmd(f'iperf -c {server_ip} -p {port} -u -b {bandwidth} -t {duration} &')  # Use UDP with high bandwidth
 
-# Function to start iperf client on h4
-def start_iperf_client2(host):
-    host.cmd('iperf -c 10.0.0.8 -p 5001 -u -b 2M -t 120 &')  # Use UDP with high bandwidth
-
-# Function to stop iperf client on h3
+# Function to stop iperf client
 def stop_iperf_client(host):
+    info(f'*** Stopping iperf on {host.name}\n')
     host.cmd('pkill iperf')
 
-# Function to capture audio traffic on a specific link
+# Function to capture traffic on a specific link
 def capture_traffic(interface, pcap_file):
-    # Replace '10.0.0.1' and '10.0.0.2' with the actual IP addresses of your audio streaming server and client
-    # Replace '54321' with the actual port used by your audio streaming application
-    filter_rule = 'host 10.0.0.1 and host 10.0.0.2 and port 54321'
-    subprocess.run(['tcpdump', '-i', interface, '-w', pcap_file, filter_rule])
+    info(f'*** Starting tcpdump capture on {interface} to {pcap_file}\n')
+    # Create a more generic filter to capture all traffic on the interface
+    # We can process and filter the pcap file later if needed
+    # Using -s 1500 to capture full packets (MTU size)
+    tcpdump_process = subprocess.Popen(['tcpdump', '-i', interface, '-s', '1500', '-w', pcap_file],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return tcpdump_process
 
 # Main execution starts here
 if __name__ == '__main__':
     # Setting up command-line argument parsing
-    parser = argparse.ArgumentParser(description='audio streaming application.')
+    parser = argparse.ArgumentParser(description='Audio streaming application.')
     parser.add_argument('--autotest', dest='autotest', action='store_const', const=True, default=False,
                         help='Enables automatic testing of the topology and closes the streaming application.')
+    parser.add_argument('--bandwidth', dest='bandwidth', type=int, default=10,
+                        help='Bandwidth in Mbps for the middle link. Default is 10.')
+    parser.add_argument('--delay', dest='delay', type=int, default=5,
+                        help='Delay in milliseconds for the middle link. Default is 5.')
     args = parser.parse_args()
 
     # Setting values for bandwidth and delay
-    bandwidth = 10  # bandwidth in Mbps
-    delay = 5       # delay in milliseconds
+    bandwidth = args.bandwidth  # bandwidth in Mbps
+    delay = args.delay         # delay in milliseconds
     autotest = args.autotest
 
     # Preparing a shared folder to store the pcap files
@@ -111,6 +120,7 @@ if __name__ == '__main__':
     switch1 = net.addSwitch('s1')
     switch2 = net.addSwitch('s2')
 
+    # Add links with specific names to make identification easier
     net.addLink(switch1, server)
     net.addLink(switch1, h1)
     middle_link = net.addLink(switch1, switch2, bw=bandwidth, delay=f'{delay}ms')
@@ -120,6 +130,12 @@ if __name__ == '__main__':
     net.addLink(switch2, h6)
     net.addLink(switch1, h4)
     net.addLink(switch2, h5)
+
+    # Store the interface names for the middle link
+    s1_middle_interface = middle_link.intf1.name
+    s2_middle_interface = middle_link.intf2.name
+    
+    info(f'*** Middle link interfaces: {s1_middle_interface} <-> {s2_middle_interface}\n')
 
     # Starting the network
     info('\n*** Starting network\n')
@@ -135,11 +151,28 @@ if __name__ == '__main__':
     streaming_client = add_streaming_container(mgr, 'streaming_client', 'client', 'streaming_client_image', shared_directory)
 
     # Path to save the pcap file
-    pcap_file = os.path.join(shared_directory, 'capture.pcap')
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    pcap_file = os.path.join(shared_directory, f'audio_capture_{timestamp}.pcap')
 
-    # Start capturing audio traffic on the middle link
-    capture_thread = threading.Thread(target=capture_traffic, args=(middle_link.intf1.name, pcap_file))
-    capture_thread.start()
+    # Start capturing traffic on the middle link
+    tcpdump_process = capture_traffic(s1_middle_interface, pcap_file)
+
+    # Start iperf servers
+    start_iperf_server(h6)
+    start_iperf_server(h5)
+
+    # Use a timer to start iperf communication between h3 and h6 after 2 seconds
+    def start_iperf_after_delay():
+        time.sleep(2)
+        start_iperf_client(h3, '10.0.0.6')
+        start_iperf_client(h4, '10.0.0.8')
+        time.sleep(20)
+        stop_iperf_client(h3)
+        stop_iperf_client(h4)
+
+    iperf_thread = threading.Thread(target=start_iperf_after_delay)
+    iperf_thread.daemon = True  # Set as daemon to exit when main program exits
+    iperf_thread.start()
 
     # Creating threads to run the server and client
     server_thread = threading.Thread(target=start_server)
@@ -149,38 +182,28 @@ if __name__ == '__main__':
     server_thread.start()
     client_thread.start()
 
-    # Start iperf server on h6
-    start_iperf_server(h6)
-    start_iperf_server(h5)
+    try:
+        # If not in autotest mode, start an interactive CLI
+        if not autotest:
+            CLI(net)
+        else:
+            # Wait for threads to finish in autotest mode
+            server_thread.join()
+            client_thread.join()
+            iperf_thread.join()
+    except KeyboardInterrupt:
+        info("\n*** Caught keyboard interrupt, stopping experiment\n")
+    finally:
+        # Stop tcpdump capture
+        if tcpdump_process:
+            info("\n*** Stopping tcpdump capture\n")
+            tcpdump_process.send_signal(signal.SIGINT)
+            tcpdump_process.wait()
+            info(f"*** Traffic capture saved to {pcap_file}\n")
 
-    # Use a timer to start iperf communication between h3 and h6 after 2 seconds
-    def start_iperf_after_delay():
-        time.sleep(2)
-        start_iperf_client(h3)
-        start_iperf_client2(h4)
-        time.sleep(20)
-        stop_iperf_client(h3)
-        stop_iperf_client(h4)
-
-    iperf_thread = threading.Thread(target=start_iperf_after_delay)
-    iperf_thread.start()
-
-    # Waiting for the server and client threads to finish
-    server_thread.join()
-    client_thread.join()
-
-    # Wait for the iperf thread to finish
-    iperf_thread.join()
-
-    # Stop capturing traffic
-    capture_thread.join()
-
-    # If not in autotest mode, start an interactive CLI
-    if not autotest:
-        CLI(net)
-
-    # Cleanup: removing containers and stopping the network and VNF manager
-    mgr.removeContainer('streaming_server')
-    mgr.removeContainer('streaming_client')
-    net.stop()
-    mgr.stop()
+        # Cleanup: removing containers and stopping the network and VNF manager
+        info('\n*** Cleaning up\n')
+        mgr.removeContainer('streaming_server')
+        mgr.removeContainer('streaming_client')
+        net.stop()
+        mgr.stop()
