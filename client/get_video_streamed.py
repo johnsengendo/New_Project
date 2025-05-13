@@ -6,16 +6,27 @@ import os
 import signal
 import time
 
-def start_capture():
+
+def start_capture(interface="client-eth0", outfile="pcap/client.pcap"):
     """
-    Starting capturing network traffic using tcpdump.
+    Start capturing network traffic on the specified interface, filtering for RTMP (TCP port 1935).
     """
-    proc = subprocess.Popen(["tcpdump", "-U", "-s0", "-i", "client-eth0", "src", "port", "1935", "-w", "pcap/client.pcap"])
+    cmd = [
+        "tcpdump",
+        "-U",        # Unbuffered packet writes
+        "-s0",       # Capture full packet
+        "-i", interface,
+        "tcp",       # Only TCP (RTMP)
+        "port", "1935",
+        "-w", outfile
+    ]
+    proc = subprocess.Popen(cmd)
     return proc.pid
+
 
 def stop_capture(pid):
     """
-    Stopping the tcpdump process gracefully by sending a SIGINT signal.
+    Stop the tcpdump process by sending SIGINT.
     """
     try:
         os.kill(pid, signal.SIGINT)
@@ -23,27 +34,33 @@ def stop_capture(pid):
     except OSError as e:
         print(f"Error stopping capture: {e}")
 
-def get_video_stream():
+
+def get_audio_stream():
     """
-    Main function to handle video streaming.
+    Capture and save an RTMP audio stream to a local file.
     """
     out_file = "stream_output.flv"
     capture_traffic = True
 
     if capture_traffic:
-        pid = start_capture() # Starting to capture traffic
-        time.sleep(2)
+        pid = start_capture()
+        time.sleep(2)  # ensure tcpdump is running
 
     ffmpeg_command = [
-        "ffmpeg", "-loglevel", "info", "-stats", "-i", "rtmp://10.0.0.1:1935/live/video.flv",
-        "-t", "120", "-probesize", "80000", "-analyzeduration", "15", "-c:a", "copy", "-c:v", "copy", out_file
+        "ffmpeg",
+        "-loglevel", "info",
+        "-stats",
+        "-i", "rtmp://10.0.0.1:1935/live/audio.flv",
+        "-t", "120",
+        "-vn",               # disable video
+        "-c:a", "copy",    # copy audio stream
+        out_file
     ]
-    subprocess.run(ffmpeg_command)
+    subprocess.run(ffmpeg_command, check=True)
 
     if capture_traffic:
-        stop_capture(pid) # Stopping the capturing
-
+        stop_capture(pid)
 
 
 if __name__ == "__main__":
-    get_video_stream()
+    get_audio_stream()
