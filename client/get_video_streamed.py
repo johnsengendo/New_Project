@@ -1,22 +1,22 @@
-#!/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import subprocess
 import os
-import signal
 import time
+import signal
 
 
-def start_capture(interface="client-eth0", outfile="pcap/client.pcap"):
+def start_capture(interface, outfile="pcap/server.pcap"):
     """
-    Start capturing network traffic on the specified interface, filtering for RTMP (TCP port 1935).
+    Start packet capture on the given interface, filtering for RTMP (TCP port 1935).
     """
     cmd = [
         "tcpdump",
-        "-U",        # Unbuffered packet writes
-        "-s0",       # Capture full packet
+        "-U",        # unbuffered packet writes
+        "-s0",       # capture full packet
         "-i", interface,
-        "tcp",       # Only TCP (RTMP)
+        "tcp",       # only TCP (RTMP)
         "port", "1935",
         "-w", outfile
     ]
@@ -24,43 +24,76 @@ def start_capture(interface="client-eth0", outfile="pcap/client.pcap"):
     return proc.pid
 
 
-def stop_capture(pid):
+def stop_capture(pids):
     """
-    Stop the tcpdump process by sending SIGINT.
+    Stop tcpdump processes by sending SIGINT to each pid.
     """
-    try:
-        os.kill(pid, signal.SIGINT)
-        print("Capture stopped successfully.")
-    except OSError as e:
-        print(f"Error stopping capture: {e}")
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGINT)
+        except OSError as e:
+            print(f"Error stopping capture (pid={pid}): {e}")
 
 
-def get_audio_stream():
+def stream_audio(input_file,
+                 loops=0,
+                 duration=120,
+                 rtmp_url="rtmp://localhost:1935/live/audio.flv"):
     """
-    Capture and save an RTMP audio stream to a local file.
+    Stream the specified audio file (e.g., WAV) via FFmpeg over RTMP.
+
+    - `-re`: read input at native rate
+    - `-stream_loop`: number of loops (0=no loop)
+    - `-i`: input file (wav, mp3, etc.)
+    - `-vn`: disable video
+    - `-c:a aac`: encode to AAC
+    - `-ar 44100`: sampling rate
+    - `-ac 1`: mono
+    - `-t`: stream duration
+    - `-f flv`: RTMP format
     """
-    out_file = "stream_output.flv"
-    capture_traffic = True
-
-    if capture_traffic:
-        pid = start_capture()
-        time.sleep(2)  # ensure tcpdump is running
-
-    ffmpeg_command = [
+    ffmpeg_cmd = [
         "ffmpeg",
         "-loglevel", "info",
         "-stats",
-        "-i", "rtmp://10.0.0.1:1935/live/audio.flv",
-        "-t", "120",
-        "-vn",               # disable video
-        "-c:a", "copy",    # copy audio stream
-        out_file
+        "-re",
+        "-stream_loop", str(loops),
+        "-i", input_file,
+        "-vn",
+        "-c:a", "aac",
+        "-ar", "44100",
+        "-ac", "1",
+        "-t", str(duration),
+        "-f", "flv",
+        rtmp_url
     ]
-    subprocess.run(ffmpeg_command, check=True)
+    subprocess.run(ffmpeg_cmd, check=True)
 
-    if capture_traffic:
-        stop_capture(pid)
+
+def main():
+    # Path to your downloaded WAV file
+    input_audio = "audio/downloaded_track.wav"
+    loops = 0        # 0 = no loop, -1 = infinite
+    duration = 120   # seconds to stream
+    capture = True
+    pids = []
+
+    if capture:
+        pids.append(start_capture("server-eth0"))
+        pids.append(start_capture("h6-eth0"))
+        time.sleep(2)  # wait for tcpdump
+
+    try:
+        stream_audio(
+            input_file=input_audio,
+            loops=loops,
+            duration=duration,
+            rtmp_url="rtmp://localhost:1935/live/audio.flv"
+        )
+    finally:
+        if capture:
+            stop_capture(pids)
 
 
 if __name__ == "__main__":
-    get_audio_stream()
+    main()
