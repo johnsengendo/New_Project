@@ -28,11 +28,11 @@ def add_streaming_container(manager, name, role, image, shared_dir):
 
 # Function to start server
 def start_server():
-    subprocess.run(['docker', 'exec', '-it', 'streaming_server', 'bash', '-c', 'cd /home && python3 audio_streaming.py'])
+    subprocess.run(['docker', 'exec', '-it', 'streaming_server', 'bash', '-c', 'cd /home && python3 video_streaming.py'])
 
 # Function to start client
 def start_client():
-    subprocess.run(['docker', 'exec', '-it', 'streaming_client', 'bash', '-c', 'cd /home && python3 get_audio_streamed.py'])
+    subprocess.run(['docker', 'exec', '-it', 'streaming_client', 'bash', '-c', 'cd /home && python3 get_video_streamed.py'])
 
 # Function to start iperf server on h6
 def start_iperf_server(host):
