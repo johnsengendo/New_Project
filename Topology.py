@@ -1,4 +1,4 @@
-#! /usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 # Importing required modules
@@ -41,12 +41,18 @@ def start_iperf_server(host):
 # Function to start iperf client on h3
 def start_iperf_client(host):
     host.cmd('iperf -c 10.0.0.6 -p 5001 -u -b 2M -t 120 &')  # Use UDP with high bandwidth
+
 # Function to start iperf client on h4
 def start_iperf_client2(host):
     host.cmd('iperf -c 10.0.0.8 -p 5001 -u -b 2M -t 120 &')  # Use UDP with high bandwidth
+
 # Function to stop iperf client on h3
 def stop_iperf_client(host):
     host.cmd('pkill iperf')
+
+# Function to capture traffic on a specific link
+def capture_traffic(interface, pcap_file):
+    subprocess.run(['tcpdump', '-i', interface, '-w', pcap_file])
 
 # Main execution starts here
 if __name__ == '__main__':
@@ -104,7 +110,7 @@ if __name__ == '__main__':
 
     net.addLink(switch1, server)
     net.addLink(switch1, h1)
-    net.addLink(switch1, switch2, bw=bandwidth, delay=f'{delay}ms')
+    middle_link = net.addLink(switch1, switch2, bw=bandwidth, delay=f'{delay}ms')
     net.addLink(switch2, client)
     net.addLink(switch2, h2)
     net.addLink(switch1, h3)
@@ -124,6 +130,13 @@ if __name__ == '__main__':
     # Adding containers
     streaming_server = add_streaming_container(mgr, 'streaming_server', 'server', 'streaming_server_image', shared_directory)
     streaming_client = add_streaming_container(mgr, 'streaming_client', 'client', 'streaming_client_image', shared_directory)
+
+    # Path to save the pcap file
+    pcap_file = os.path.join(shared_directory, 'capture.pcap')
+
+    # Start capturing traffic on the middle link
+    capture_thread = threading.Thread(target=capture_traffic, args=(middle_link.intf1.name, pcap_file))
+    capture_thread.start()
 
     # Creating threads to run the server and client
     server_thread = threading.Thread(target=start_server)
@@ -155,6 +168,9 @@ if __name__ == '__main__':
 
     # Wait for the iperf thread to finish
     iperf_thread.join()
+
+    # Stop capturing traffic
+    capture_thread.join()
 
     # If not in autotest mode, start an interactive CLI
     if not autotest:
