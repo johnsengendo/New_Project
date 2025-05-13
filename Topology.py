@@ -28,11 +28,11 @@ def add_streaming_container(manager, name, role, image, shared_dir):
 
 # Function to start server
 def start_server():
-    subprocess.run(['docker', 'exec', '-it', 'streaming_server', 'bash', '-c', 'cd /home && python3 video_streaming.py'])
+    subprocess.run(['docker', 'exec', '-it', 'streaming_server', 'bash', '-c', 'cd /home && python3 audio_streaming.py'])
 
 # Function to start client
 def start_client():
-    subprocess.run(['docker', 'exec', '-it', 'streaming_client', 'bash', '-c', 'cd /home && python3 get_video_streamed.py'])
+    subprocess.run(['docker', 'exec', '-it', 'streaming_client', 'bash', '-c', 'cd /home && python3 get_audio_streamed.py'])
 
 # Function to start iperf server on h6
 def start_iperf_server(host):
@@ -50,17 +50,17 @@ def start_iperf_client2(host):
 def stop_iperf_client(host):
     host.cmd('pkill iperf')
 
-# Function to capture video traffic on a specific link
+# Function to capture audio traffic on a specific link
 def capture_traffic(interface, pcap_file):
-    # Replace '10.0.0.1' and '10.0.0.2' with the actual IP addresses of your video streaming server and client
-    # Replace '12345' with the actual port used by your video streaming application
-    filter_rule = 'host 10.0.0.1 and host 10.0.0.2 and port 12345'
+    # Replace '10.0.0.1' and '10.0.0.2' with the actual IP addresses of your audio streaming server and client
+    # Replace '54321' with the actual port used by your audio streaming application
+    filter_rule = 'host 10.0.0.1 and host 10.0.0.2 and port 54321'
     subprocess.run(['tcpdump', '-i', interface, '-w', pcap_file, filter_rule])
 
 # Main execution starts here
 if __name__ == '__main__':
     # Setting up command-line argument parsing
-    parser = argparse.ArgumentParser(description='video streaming application.')
+    parser = argparse.ArgumentParser(description='audio streaming application.')
     parser.add_argument('--autotest', dest='autotest', action='store_const', const=True, default=False,
                         help='Enables automatic testing of the topology and closes the streaming application.')
     args = parser.parse_args()
@@ -137,7 +137,7 @@ if __name__ == '__main__':
     # Path to save the pcap file
     pcap_file = os.path.join(shared_directory, 'capture.pcap')
 
-    # Start capturing video traffic on the middle link
+    # Start capturing audio traffic on the middle link
     capture_thread = threading.Thread(target=capture_traffic, args=(middle_link.intf1.name, pcap_file))
     capture_thread.start()
 
