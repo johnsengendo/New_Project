@@ -9,6 +9,7 @@ import sys
 import time
 import threading
 import signal
+import random
 
 # Importing necessary functionalities from ComNetsEmu and Mininet
 from comnetsemu.cli import CLI, spawnXtermDocker
@@ -42,15 +43,89 @@ def start_iperf_server(host, port=5001):
     info(f'*** Starting iperf server on {host.name}\n')
     host.cmd(f'iperf -s -p {port} -u &')  # Use UDP for more disruptive traffic
 
-# Function to start iperf client
-def start_iperf_client(host, server_ip, port=5001, bandwidth='10K', duration=120):
-    info(f'*** Starting iperf client on {host.name} to {server_ip}\n')
-    host.cmd(f'iperf -c {server_ip} -p {port} -u -b {bandwidth} -t {duration} &')  # Use UDP with high bandwidth
+# Function to start iperf client with specific bandwidth
+def start_iperf_client(host, server_ip, port=5001, bandwidth='10K', duration=10):
+    info(f'*** Starting iperf client on {host.name} to {server_ip} with bandwidth {bandwidth}\n')
+    host.cmd(f'iperf -c {server_ip} -p {port} -u -b {bandwidth} -t {duration} &')  # Use UDP with specified bandwidth
 
 # Function to stop iperf client
 def stop_iperf_client(host):
     info(f'*** Stopping iperf on {host.name}\n')
     host.cmd('pkill iperf')
+
+# New function to create traffic spike
+def create_traffic_spike(source_host, target_ip, port=5001, base_bw='5M', spike_bw='80M', spike_duration=5, base_duration=10):
+    """Create a traffic spike pattern with base and spike traffic levels"""
+    info(f'*** Creating traffic spike from {source_host.name} to {target_ip}\n')
+    # Start with base bandwidth
+    start_iperf_client(source_host, target_ip, port, bandwidth=base_bw, duration=base_duration)
+    time.sleep(base_duration)
+    
+    # Create a spike
+    start_iperf_client(source_host, target_ip, port, bandwidth=spike_bw, duration=spike_duration)
+    time.sleep(spike_duration)
+    
+    # Return to base bandwidth
+    start_iperf_client(source_host, target_ip, port, bandwidth=base_bw, duration=base_duration)
+    time.sleep(base_duration)
+
+# New function to manage multiple spikes with a traffic pattern
+def create_traffic_pattern(hosts_pairs, duration=60):
+    """Create a pattern of traffic spikes as shown in the desired image"""
+    info('*** Starting traffic pattern generation\n')
+    
+    start_time = time.time()
+    end_time = start_time + duration
+    
+    # Define spike points (relative timing in seconds from start)
+    # This will create a pattern similar to the hand-drawn image
+    spike_points = [
+        {'time': 5, 'duration': 8, 'bw': '90M'},   # First tall spike
+        {'time': 20, 'duration': 7, 'bw': '70M'},  # Second tall spike
+        {'time': 35, 'duration': 5, 'bw': '30M'},  # Small spike
+        {'time': 45, 'duration': 8, 'bw': '85M'},  # Third tall spike
+        {'time': 55, 'duration': 5, 'bw': '75M'},  # Final spike
+    ]
+    
+    # Start base traffic
+    for src_host, dest_ip, port in hosts_pairs:
+        start_iperf_client(src_host, dest_ip, port, bandwidth='8M', duration=duration)
+    
+    # Schedule spikes
+    while time.time() < end_time:
+        current_time = time.time() - start_time
+        
+        # Check if we should trigger a spike
+        for spike in spike_points:
+            if abs(current_time - spike['time']) < 0.5:  # If we're within half a second of spike time
+                # Launch spike from random host pair
+                host_pair = random.choice(hosts_pairs)
+                src_host, dest_ip, port = host_pair
+                
+                # Stop current traffic
+                stop_iperf_client(src_host)
+                time.sleep(0.5)
+                
+                # Create spike
+                info(f'*** Creating spike at {current_time:.1f}s: {spike["bw"]} for {spike["duration"]}s\n')
+                start_iperf_client(src_host, dest_ip, port, bandwidth=spike['bw'], duration=spike['duration'])
+                
+                # Schedule return to normal after spike
+                def return_to_normal(host, ip, p):
+                    time.sleep(spike['duration'])
+                    stop_iperf_client(host)
+                    time.sleep(0.5)
+                    start_iperf_client(host, ip, p, bandwidth='8M', duration=duration)
+                
+                # Start recovery thread
+                recovery_thread = threading.Thread(target=return_to_normal, args=(src_host, dest_ip, port))
+                recovery_thread.daemon = True
+                recovery_thread.start()
+                
+                # Remove spike from list to prevent duplicates
+                spike_points.remove(spike)
+                
+        time.sleep(0.1)  # Small sleep to prevent CPU hogging
 
 # Function to capture traffic on a specific link
 def capture_traffic(interface, pcap_file):
@@ -68,15 +143,18 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Audio streaming application.')
     parser.add_argument('--autotest', dest='autotest', action='store_const', const=True, default=False,
                         help='Enables automatic testing of the topology and closes the streaming application.')
-    parser.add_argument('--bandwidth', dest='bandwidth', type=int, default=10,
-                        help='Bandwidth in Mbps for the middle link. Default is 10.')
+    parser.add_argument('--bandwidth', dest='bandwidth', type=int, default=100,
+                        help='Bandwidth in Mbps for the middle link. Default is 100.')
     parser.add_argument('--delay', dest='delay', type=int, default=5,
                         help='Delay in milliseconds for the middle link. Default is 5.')
+    parser.add_argument('--duration', dest='duration', type=int, default=60,
+                        help='Duration of traffic pattern in seconds. Default is 60.')
     args = parser.parse_args()
 
     # Setting values for bandwidth and delay
     bandwidth = args.bandwidth  # bandwidth in Mbps
     delay = args.delay         # delay in milliseconds
+    duration = args.duration   # duration in seconds
     autotest = args.autotest
 
     # Preparing a shared folder to store the pcap files
@@ -123,6 +201,7 @@ if __name__ == '__main__':
     # Add links with specific names to make identification easier
     net.addLink(switch1, server)
     net.addLink(switch1, h1)
+    # Increase middle link capacity to handle traffic spikes
     middle_link = net.addLink(switch1, switch2, bw=bandwidth, delay=f'{delay}ms')
     net.addLink(switch2, client)
     net.addLink(switch2, h2)
@@ -157,22 +236,26 @@ if __name__ == '__main__':
     # Start capturing traffic on the middle link
     tcpdump_process = capture_traffic(s1_middle_interface, pcap_file)
 
-    # Start iperf servers
-    start_iperf_server(h6)
-    start_iperf_server(h5)
+    # Start iperf servers on multiple hosts
+    start_iperf_server(h6, port=5001)
+    start_iperf_server(h5, port=5002)
+    start_iperf_server(h2, port=5003)
 
-    # Use a timer to start iperf communication between h3 and h6 after 2 seconds
-    def start_iperf_after_delay():
-        time.sleep(2)
-        start_iperf_client(h3, '10.0.0.6')
-        start_iperf_client(h4, '10.0.0.8')
-        time.sleep(20)
-        stop_iperf_client(h3)
-        stop_iperf_client(h4)
+    # Define host pairs for traffic generation
+    host_pairs = [
+        (h3, '10.0.0.6', 5001),
+        (h4, '10.0.0.8', 5002),
+        (h1, '10.0.0.4', 5003)
+    ]
 
-    iperf_thread = threading.Thread(target=start_iperf_after_delay)
-    iperf_thread.daemon = True  # Set as daemon to exit when main program exits
-    iperf_thread.start()
+    # Use a thread to create traffic pattern
+    def run_traffic_pattern():
+        time.sleep(2)  # Short delay before starting traffic
+        create_traffic_pattern(host_pairs, duration=duration)
+
+    traffic_thread = threading.Thread(target=run_traffic_pattern)
+    traffic_thread.daemon = True
+    traffic_thread.start()
 
     # Creating threads to run the server and client
     server_thread = threading.Thread(target=start_server)
@@ -187,10 +270,9 @@ if __name__ == '__main__':
         if not autotest:
             CLI(net)
         else:
-            # Wait for threads to finish in autotest mode
-            server_thread.join()
-            client_thread.join()
-            iperf_thread.join()
+            # Wait for specified duration in autotest mode
+            info(f"\n*** Running traffic pattern for {duration} seconds\n")
+            time.sleep(duration + 5)  # Add extra time for cleanup
     except KeyboardInterrupt:
         info("\n*** Caught keyboard interrupt, stopping experiment\n")
     finally:
@@ -200,6 +282,10 @@ if __name__ == '__main__':
             tcpdump_process.send_signal(signal.SIGINT)
             tcpdump_process.wait()
             info(f"*** Traffic capture saved to {pcap_file}\n")
+
+        # Stop all iperf clients
+        for host in [h1, h3, h4]:
+            stop_iperf_client(host)
 
         # Cleanup: removing containers and stopping the network and VNF manager
         info('\n*** Cleaning up\n')
