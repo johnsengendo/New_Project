@@ -43,7 +43,7 @@ def start_iperf_server(host, port=5001):
     host.cmd(f'iperf -s -p {port} -u &')  # Use UDP for more disruptive traffic
 
 # Function to start iperf client
-def start_iperf_client(host, server_ip, port=5001, bandwidth='2M', duration=120):
+def start_iperf_client(host, server_ip, port=5001, bandwidth='10K', duration=120):
     info(f'*** Starting iperf client on {host.name} to {server_ip}\n')
     host.cmd(f'iperf -c {server_ip} -p {port} -u -b {bandwidth} -t {duration} &')  # Use UDP with high bandwidth
 
