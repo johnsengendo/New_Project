@@ -63,7 +63,7 @@ def get_audio_stream():
         total_time = 0
         stream_duration = 20  # seconds
         pause_duration = 5    # seconds
-        max_duration = 300    # 5 minutes
+        max_duration = 600    # 5 minutes
 
         segment_count = 0
 
