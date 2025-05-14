@@ -5,7 +5,6 @@
 import argparse
 import os
 import subprocess
-import sys
 import time
 import threading
 import signal
@@ -21,7 +20,7 @@ def add_streaming_container(manager, name, role, image, shared_dir):
     return manager.addContainer(
         name, role, image, '',
         docker_args={
-            'volumes': { shared_dir: {'bind': '/home/pcap/', 'mode': 'rw'} }
+            'volumes': {shared_dir: {'bind': '/home/pcap/', 'mode': 'rw'}}
         }
     )
 
@@ -54,12 +53,13 @@ def stop_iperf_client(host):
     info(f'*** Stopping iperf on {host.name}\n')
     host.cmd('pkill iperf')
 
-# Start tcpdump on an interface, return process
-def capture_traffic(interface, pcap_file):
-    info(f'*** Starting tcpdump on {interface} -> {pcap_file}\n')
-    return subprocess.Popen([
-        'tcpdump', '-i', interface, '-s', '1500', '-w', pcap_file
-    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+# Start tcpdump on an interface, with optional BPF filter, return process
+def capture_traffic(interface, pcap_file, bpf_filter=None):
+    cmd = ['tcpdump', '-i', interface, '-s', '1500', '-w', pcap_file]
+    if bpf_filter:
+        cmd += [bpf_filter]
+    info(f"*** Starting tcpdump on {interface} -> {pcap_file} filter='{bpf_filter or 'none'}'\n")
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 # Schedule dynamic netem events on middle link
 def schedule_middle_link_events(intf, events):
@@ -80,6 +80,7 @@ if __name__ == '__main__':
     parser.add_argument('--autotest', action='store_true', help='Run without CLI and exit')
     parser.add_argument('--bandwidth', type=int, default=10, help='Initial bw (Mbps)')
     parser.add_argument('--delay', type=int, default=5, help='Initial delay (ms)')
+    parser.add_argument('--audio-port', type=int, default=5000, help='UDP port used by audio stream')
     args = parser.parse_args()
 
     # Prepare pcap directory
@@ -118,8 +119,7 @@ if __name__ == '__main__':
     net.addLink(s2, h5)
 
     intf1 = mid.intf1.name
-    intf2 = mid.intf2.name
-    info(f"*** Middle link: {intf1} <-> {intf2}\n")
+    info(f"*** Middle link: {intf1}\n")
 
     info('*** Starting network\n')
     net.start()
@@ -132,26 +132,25 @@ if __name__ == '__main__':
     streaming_server = add_streaming_container(mgr, 'streaming_server', 'server', 'streaming_server_image', pcap_dir)
     streaming_client = add_streaming_container(mgr, 'streaming_client', 'client', 'streaming_client_image', pcap_dir)
 
-    # Start tcpdump on both sides of middle link
+    # Launch audio-only pcap on middle link
     ts = time.strftime('%Y%m%d-%H%M%S')
-    pcap1 = os.path.join(pcap_dir, f'mid_{intf1}_{ts}.pcap')
-    pcap2 = os.path.join(pcap_dir, f'mid_{intf2}_{ts}.pcap')
-    dump1 = capture_traffic(intf1, pcap1)
-    dump2 = capture_traffic(intf2, pcap2)
+    audio_pcap = os.path.join(pcap_dir, f'audio_middle_{ts}.pcap')
+    audio_filter = f"udp port {args.audio_port}"
+    audio_dump = capture_traffic(intf1, audio_pcap, audio_filter)
 
-    # Start servers and clients
-    threading.Thread(target=start_iperf_server, args=(h5,)).start()
-    threading.Thread(target=start_iperf_server, args=(h6,)).start()
+    # Start iperf servers
+    threading.Thread(target=start_iperf_server, args=(h5,), daemon=True).start()
+    threading.Thread(target=start_iperf_server, args=(h6,), daemon=True).start()
 
-    # Iperf background traffic
-    def bg_traffic():
-        time.sleep(2)
-        start_iperf_client(h3, '10.0.0.6')
-        start_iperf_client(h4, '10.0.0.8')
-        time.sleep(20)
-        stop_iperf_client(h3)
-        stop_iperf_client(h4)
-    threading.Thread(target=bg_traffic, daemon=True).start()
+    # Background iperf traffic
+def bg_traffic():
+    time.sleep(2)
+    start_iperf_client(h3, '10.0.0.6')
+    start_iperf_client(h4, '10.0.0.8')
+    time.sleep(20)
+    stop_iperf_client(h3)
+    stop_iperf_client(h4)
+threading.Thread(target=bg_traffic, daemon=True).start()
 
     # Streaming threads
     server_t = threading.Thread(target=start_server)
@@ -159,9 +158,9 @@ if __name__ == '__main__':
     server_t.start()
     client_t.start()
 
-    # Define and start dynamic middle-link events
+    # Dynamic middle-link events
     events = [
-        {'delay': 5,  'rate': 5},
+        {'delay': 5, 'rate': 5},
         {'delay': 15, 'loss': 10},
         {'delay': 25, 'delay_ms': 50},
         {'delay': 35, 'rate': 20, 'loss': 0}
@@ -174,16 +173,15 @@ if __name__ == '__main__':
         else:
             server_t.join()
             client_t.join()
-            time.sleep(max(e['delay'] for e in events) + 5)
+            time.sleep(max(ev['delay'] for ev in events) + 5)
     except KeyboardInterrupt:
         info('*** Interrupted by user\n')
     finally:
-        # Stop captures
-        for p in (dump1, dump2):
-            if p:
-                p.send_signal(signal.SIGINT)
-                p.wait()
-        info('*** Cleared captures\n')
+        # Stop audio-only capture
+        if audio_dump:
+            audio_dump.send_signal(signal.SIGINT)
+            audio_dump.wait()
+        info('*** Audio capture saved\n')
 
         # Cleanup
         mgr.removeContainer('streaming_server')
