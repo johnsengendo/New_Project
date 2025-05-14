@@ -38,8 +38,7 @@ def stop_capture(pids):
 
 def stream_segment(input_file, duration, rtmp_url):
     """
-    Launch ffmpeg to stream `input_file` for `duration` seconds.
-    Returns the Popen object.
+    Stream a segment of the audio file using FFmpeg for a given duration.
     """
     cmd = [
         "ffmpeg",
@@ -47,48 +46,53 @@ def stream_segment(input_file, duration, rtmp_url):
         "-stats",
         "-re",
         "-i", input_file,
-        "-vn",
+        "-vn",                      # Disable video
         "-t", str(duration),
-        "-c:a", "aac",
-        "-ar", "44100",
-        "-ac", "1",
-        "-f", "flv",
+        "-c:a", "aac",              # Audio codec
+        "-ar", "44100",             # Sample rate
+        "-ac", "1",                 # Mono audio
+        "-f", "flv",                # FLV container for RTMP
         rtmp_url
     ]
     return subprocess.Popen(cmd)
 
 
 def main():
-    input_audio = "video/audio.wav"
+    input_audio = "video/audio.wav"  # Your WAV audio file
     rtmp_url = "rtmp://localhost:1935/live/audio.flv"
 
-    # Define the sequence of streaming durations (in seconds)
-    segments = [20, 20]
-    # Pause length after each segment
-    pause = 5
-
-    # --- optional tcpdump capture setup ---
     capture = True
     pids = []
+
     if capture:
         pids.append(start_capture("server-eth0", "pcap/server.pcap"))
         pids.append(start_capture("h6-eth0",     "pcap/h6.pcap"))
-        time.sleep(2)  # give tcpdump a moment to spin up
+        time.sleep(2)  # Allow tcpdump to start
 
     try:
-        for idx, seg_dur in enumerate(segments):
-            print(f">> Starting stream segment #{idx+1} for {seg_dur}s")
-            p = stream_segment(input_audio, seg_dur, rtmp_url)
-            p.wait()  # block until ffmpeg finishes this segment
+        total_time = 0
+        segment_duration = 20  # seconds
+        pause_duration = 5     # seconds
+        max_duration = 300     # 5 minutes
 
-            # if this isn’t the last segment, pause
-            if idx < len(segments) - 1:
-                print(f">> Pausing stream for {pause}s")
-                time.sleep(pause)
+        while total_time + segment_duration <= max_duration:
+            print(f">> Streaming for {segment_duration}s (Total elapsed: {total_time}s)")
+            process = stream_segment(
+                input_file=input_audio,
+                duration=segment_duration,
+                rtmp_url=rtmp_url
+            )
+            process.wait()
+            total_time += segment_duration
 
-        # after the last segment, you could optionally add one more pause
-        print(f">> Final pause for {pause}s before exit")
-        time.sleep(pause)
+            if total_time + pause_duration <= max_duration:
+                print(f">> Pausing for {pause_duration}s")
+                time.sleep(pause_duration)
+                total_time += pause_duration
+            else:
+                break
+
+        print(">> 5 minutes reached. Streaming ended.")
 
     finally:
         if capture:
