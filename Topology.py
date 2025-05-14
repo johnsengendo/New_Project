@@ -71,61 +71,55 @@ def create_traffic_spike(source_host, target_ip, port=5001, base_bw='5M', spike_
 
 # New function to manage multiple spikes with a traffic pattern
 def create_traffic_pattern(hosts_pairs, duration=60):
-    """Create a pattern of traffic spikes as shown in the desired image"""
+    """Create a pattern with exactly 2 traffic spikes"""
     info('*** Starting traffic pattern generation\n')
     
     start_time = time.time()
     end_time = start_time + duration
     
-    # Define spike points (relative timing in seconds from start)
-    # This will create a pattern similar to the hand-drawn image
+    # Define spike points - just 2 spikes, each 5 seconds long
     spike_points = [
-        {'time': 5, 'duration': 8, 'bw': '90M'},   # First tall spike
-        {'time': 20, 'duration': 7, 'bw': '70M'},  # Second tall spike
-        {'time': 35, 'duration': 5, 'bw': '30M'},  # Small spike
-        {'time': 45, 'duration': 8, 'bw': '85M'},  # Third tall spike
-        {'time': 55, 'duration': 5, 'bw': '75M'},  # Final spike
+        {'time': 15, 'duration': 5, 'bw': '90M'},  # First spike at 15 seconds
+        {'time': 40, 'duration': 5, 'bw': '90M'},  # Second spike at 40 seconds
     ]
     
-    # Start base traffic
+    # Start base traffic - low level background traffic
     for src_host, dest_ip, port in hosts_pairs:
         start_iperf_client(src_host, dest_ip, port, bandwidth='8M', duration=duration)
     
-    # Schedule spikes
-    while time.time() < end_time:
-        current_time = time.time() - start_time
+    # Wait and create the two spikes at the appropriate times
+    for spike in spike_points:
+        # Calculate how long to wait until this spike
+        wait_time = spike['time'] - (time.time() - start_time)
+        if wait_time > 0:
+            time.sleep(wait_time)
         
-        # Check if we should trigger a spike
-        for spike in spike_points:
-            if abs(current_time - spike['time']) < 0.5:  # If we're within half a second of spike time
-                # Launch spike from random host pair
-                host_pair = random.choice(hosts_pairs)
-                src_host, dest_ip, port = host_pair
-                
-                # Stop current traffic
-                stop_iperf_client(src_host)
-                time.sleep(0.5)
-                
-                # Create spike
-                info(f'*** Creating spike at {current_time:.1f}s: {spike["bw"]} for {spike["duration"]}s\n')
-                start_iperf_client(src_host, dest_ip, port, bandwidth=spike['bw'], duration=spike['duration'])
-                
-                # Schedule return to normal after spike
-                def return_to_normal(host, ip, p):
-                    time.sleep(spike['duration'])
-                    stop_iperf_client(host)
-                    time.sleep(0.5)
-                    start_iperf_client(host, ip, p, bandwidth='8M', duration=duration)
-                
-                # Start recovery thread
-                recovery_thread = threading.Thread(target=return_to_normal, args=(src_host, dest_ip, port))
-                recovery_thread.daemon = True
-                recovery_thread.start()
-                
-                # Remove spike from list to prevent duplicates
-                spike_points.remove(spike)
-                
-        time.sleep(0.1)  # Small sleep to prevent CPU hogging
+        # Choose a host pair for this spike
+        host_pair = hosts_pairs[0]  # Use the first pair consistently
+        src_host, dest_ip, port = host_pair
+        
+        # Create spike
+        info(f'*** Creating spike: {spike["bw"]} for {spike["duration"]}s\n')
+        
+        # Stop current traffic
+        stop_iperf_client(src_host)
+        time.sleep(0.5)
+        
+        # Start spike traffic
+        start_iperf_client(src_host, dest_ip, port, bandwidth=spike['bw'], duration=spike['duration'])
+        
+        # Wait for spike duration
+        time.sleep(spike['duration'])
+        
+        # Return to baseline traffic
+        stop_iperf_client(src_host)
+        time.sleep(0.5)
+        start_iperf_client(src_host, dest_ip, port, bandwidth='8M', duration=duration)
+    
+    # Wait until the end of the total duration
+    remaining_time = end_time - time.time()
+    if remaining_time > 0:
+        time.sleep(remaining_time)
 
 # Function to capture traffic on a specific link
 def capture_traffic(interface, pcap_file):
