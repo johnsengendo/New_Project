@@ -52,22 +52,14 @@ def stop_iperf_client(host):
     info(f'*** Stopping iperf on {host.name}\n')
     host.cmd('pkill iperf')
 
-# Function to capture audio traffic on a specific link
-def capture_audio_traffic(interface, pcap_file):
-    info(f'*** Starting tcpdump capture for audio traffic on {interface} to {pcap_file}\n')
-    
-    # Filter for audio traffic - assuming RTP/UDP audio streaming on common port ranges
-    # This filter captures:
-    # 1. UDP traffic on ports commonly used for RTP (16384-32767)
-    # 2. Specifically excludes iperf traffic on port 5001
-    # 3. Includes traffic between server and client IPs (10.0.0.1 and 10.0.0.2)
-    
-    filter_expression = '(udp and not port 5001) and (host 10.0.0.1 and host 10.0.0.2)'
-    
-    tcpdump_process = subprocess.Popen(
-        ['tcpdump', '-i', interface, '-s', '1500', filter_expression, '-w', pcap_file],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
+# Function to capture traffic on a specific link
+def capture_traffic(interface, pcap_file):
+    info(f'*** Starting tcpdump capture on {interface} to {pcap_file}\n')
+    # Create a more generic filter to capture all traffic on the interface
+    # We can process and filter the pcap file later if needed
+    # Using -s 1500 to capture full packets (MTU size)
+    tcpdump_process = subprocess.Popen(['tcpdump', '-i', interface, '-s', '1500', '-w', pcap_file],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return tcpdump_process
 
 # Main execution starts here
@@ -158,11 +150,12 @@ if __name__ == '__main__':
     streaming_server = add_streaming_container(mgr, 'streaming_server', 'server', 'streaming_server_image', shared_directory)
     streaming_client = add_streaming_container(mgr, 'streaming_client', 'client', 'streaming_client_image', shared_directory)
 
-    # Path to save the pcap file - now with fixed name "audio.pcap"
-    audio_pcap_file = os.path.join(shared_directory, 'audio.pcap')
+    # Path to save the pcap file
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    pcap_file = os.path.join(shared_directory, f'audio_capture_{timestamp}.pcap')
 
-    # Start capturing audio traffic on the middle link
-    tcpdump_process = capture_audio_traffic(s1_middle_interface, audio_pcap_file)
+    # Start capturing traffic on the middle link
+    tcpdump_process = capture_traffic(s1_middle_interface, pcap_file)
 
     # Start iperf servers
     start_iperf_server(h6)
@@ -206,7 +199,7 @@ if __name__ == '__main__':
             info("\n*** Stopping tcpdump capture\n")
             tcpdump_process.send_signal(signal.SIGINT)
             tcpdump_process.wait()
-            info(f"*** Audio traffic capture saved to {audio_pcap_file}\n")
+            info(f"*** Traffic capture saved to {pcap_file}\n")
 
         # Cleanup: removing containers and stopping the network and VNF manager
         info('\n*** Cleaning up\n')
